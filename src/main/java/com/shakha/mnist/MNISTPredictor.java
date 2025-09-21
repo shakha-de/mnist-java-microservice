@@ -1,60 +1,70 @@
 package com.shakha.mnist;
 
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 import org.tensorflow.SavedModelBundle;
 import org.tensorflow.Session;
 import org.tensorflow.Tensor;
 import org.tensorflow.ndarray.StdArrays;
 import org.tensorflow.types.TFloat32;
 
-import java.util.Arrays;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 
+
+@Service
+@Slf4j
 public class MNISTPredictor {
-    public static void main(String[] args) {
+
+    private SavedModelBundle model;
+    private Session session;
+
+    @PostConstruct
+    public void init() {
         String modelPath = "saved_model";
-
-        // Die Eingabe muss 3D sein, um zur Modell-Signatur zu passen.
-        float[][][] inputData = new float[1][28][28];
-
-        // Dummy pattern
-        for (int i = 0; i < 28; i++) {
-            inputData[0][i][i] = 1.0f;
-        }
-        System.out.println("Created a dummy 28x28 input tensor.");
-
-        try (
-                SavedModelBundle model = SavedModelBundle.load(modelPath, "serve");
-                Session session = model.session()
-        ) {
-            System.out.println("TensorFlow model loaded successfully from: " + modelPath);
-
-            try (Tensor inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(inputData))) {
-
-                System.out.println("Running model prediction...");
-
-
-                Tensor result = session.runner()
-                        .feed("serving_default_keras_tensor_15", inputTensor)
-                        .fetch("StatefulPartitionedCall_1")
-                        .run()
-                        .get(0);
-
-                float[][] outputMatrix = new float[1][10];
-                try (TFloat32 resultTensor = (TFloat32) result) {
-                    StdArrays.copyFrom(resultTensor, outputMatrix);
-                }
-
-                float[] probabilities = outputMatrix[0];
-                int predictedDigit = findMaxIndex(probabilities);
-
-                System.out.println("--------------------");
-                System.out.println("Model Prediction Result:");
-                System.out.println("Predicted Digit: " + predictedDigit);
-                System.out.println("Probabilities: " + Arrays.toString(probabilities));
-                System.out.println("--------------------");
-            }
+        try {
+            model = SavedModelBundle.load(modelPath, "serve");
+            session = model.session();
+            log.info("TensorFlow model loaded successfully from: {} ", modelPath);
         } catch (Exception e) {
-            System.err.println("An error occurred: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Failed to load TensorFlow model: {} ", e.getMessage());
+            throw new RuntimeException(e);
+        }
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        if (session != null) {
+            session.close();
+        }
+        if (model != null) {
+            model.close();
+        }
+    }
+
+    public MNISTPredictionResult predict(float[][][] inputData) {
+        if (inputData.length != 1 || inputData[0].length != 28 || inputData[0][0].length != 28) {
+            throw new IllegalArgumentException("Input must be a 3D array of shape [1][28][28]");
+        }
+
+        try (Tensor inputTensor = TFloat32.tensorOf(StdArrays.ndCopyOf(inputData))) {
+            Tensor result = session.runner()
+                    .feed("serving_default_keras_tensor_15", inputTensor)
+                    .fetch("StatefulPartitionedCall_1")
+                    .run()
+                    .get(0);
+
+            float[][] outputMatrix = new float[1][10];
+            try (TFloat32 resultTensor = (TFloat32) result) {
+                StdArrays.copyFrom(resultTensor, outputMatrix);
+            }
+
+            float[] probabilities = outputMatrix[0];
+            int predictedDigit = findMaxIndex(probabilities);
+
+            return new MNISTPredictionResult(predictedDigit, probabilities);
+        } catch (Exception e) {
+            throw new RuntimeException("Prediction failed: " + e.getMessage(), e);
         }
     }
 
