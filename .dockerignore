@@ -1,0 +1,10 @@
+target/
+*.md
+.git
+.gitignore
+README.md
+mvnw
+mvnw.cmd
+request-test.py
+src/test/
+.venv
